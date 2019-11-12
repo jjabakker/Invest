@@ -1,0 +1,387 @@
+---
+title: "Binck"
+author: "Hans"
+date: "11/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readxl)
+library(tidyverse)
+```
+
+```{r}
+
+read_b_transactions <- function(currency) {
+  
+  # Read all the files in the directory and paste them into one table
+  data_root <- "~/Documents/R Projects/Invest/Data/"
+  dir   <- paste(data_root, currency, sep = "")
+  files <- list.files(dir)
+  init  <- TRUE
+  for (file in files) {
+    fullname <- paste(dir, "/", file, sep = "")
+    if (init == TRUE) {
+      transactions <- read_excel(fullname)
+      transactions <- transactions[-(1:2),]
+      init <- FALSE
+    }
+    else {
+      dd <- read_excel(fullname)
+      dd <- dd[-(1:2),]
+      transactions <- rbind(transactions, dd)
+    }
+  }
+  
+  # Assign the column names, makes them into the correct types, drop what you do not need.
+  # Eliminate any duplicates and sort
+  
+  colnames(transactions)[1:7] = c('number', 'tdate', 'vdate', 
+                                  'type', 'description', 'mutation', 'total')
+
+  transactions <- transactions %>%
+    mutate(mutation = as.integer(mutation), 
+           type     = as.factor(type),
+           ntype    = NA,
+           number   = as.integer(number),
+           tdate    = as.numeric(tdate),
+           tdate    = as.Date(tdate, origin = "1900-01-01"),
+           vdate    = as.numeric(vdate),
+           vdate    = as.Date(vdate, origin = "1900-01-01"),
+           year     = format(vdate,'%Y'), 
+           source = "Binck", 
+           FX = NA) %>%
+    arrange(number) %>%
+    select(source, number, ntype, FX, mutation, year, tdate, vdate, type, description)
+  transactions <- unique (transactions)
+  write_transactions(transactions, paste("ori_b_", currency, sep = ""))
+
+  # Anything with 'abonnement' or 'service fee' or 'Uitleenvergoeding' or 'Rente'
+  # or 'Kost'  is a 'Cost'
+  
+  
+  transactions$ntype[(str_detect(transactions$description, "koersabonnement|Service fee")  |
+                      str_detect(transactions$type, "Uitleenvergoeding|[Rr]ente| [Kk]ost")) &
+                     is.na(transactions$ntype)] = 'Cost'
+  
+  # Anything with 'Conversie' or 'Afwikkeling ' can be ignored
+  transactions$ntype[(str_detect(transactions$type, "Conversie|Afwikkeling")) &
+                     is.na(transactions$ntype)] = 'Ignore'
+                     
+  # Ignore any bookings from and to the EUR/USD accounts
+  transactions$ntype[str_detect(transactions$type,"Geldoverboeking") &
+                     str_detect(transactions$description,"USD|EUR") &
+                     is.na(transactions$ntype) ] = 'Ignore Internal'
+  
+  #transactions$ntype[str_detect(transactions$type,"Geldoverboeking") &
+  #                  str_detect(transactions$description,"253873150") &
+  #                  is.na(transactions$ntype)] = 'Ignore Internal'
+  
+  # Any 'Geldoverboeking' of a negative amount not to an EUR or USD account is an 'Withdrawal'
+  transactions$ntype[transactions$mutation < 0 & 
+                    str_detect(transactions$type,"Geldoverboeking") &
+                    !str_detect(transactions$description,"USD|EUR") &
+                    is.na(transactions$ntype)] = 'Withdraw'
+  
+  # Any 'Geldoverboeking' of a positive amount not to an EUR or USD account is an 'Deposit'
+  transactions$ntype[transactions$mutation > 0 & 
+                     str_detect(transactions$type,"Geldoverboeking") &
+                     !str_detect(transactions$description,"USD|EUR") &
+                     is.na(transactions$ntype)] = 'Deposit'
+   
+  # Any 'Geldoverboeking' of a 0 amount can be ignored
+  transactions$ntype[(is.na(transactions$mutation) | transactions$mutation == 0) & 
+                     str_detect(transactions$type, "Geldoverboeking") &
+                     is.na(transactions$ntype)] = 'Ignore'
+  
+  # Class 'koop' or 'verkoop' as 'Purchase' or 'Sell
+  transactions$ntype[transactions$mutation < 0 & 
+                     str_detect(transactions$type,"[Kk]oop")  &
+                     is.na(transactions$ntype)] = 'Purchase'
+  
+  transactions$ntype[transactions$mutation > 0 & 
+                     str_detect(transactions$type,"[Vv]erkoop") &
+                     is.na(transactions$ntype)] = 'Sell'
+
+  # Anything with 'Lichting' in the type can be ignored (option expiry)
+  transactions$ntype[str_detect(transactions$type,"[Ll]ichting")  &
+                     is.na(transactions$ntype)] = 'Ignore'
+  
+  # Anything with 'Deponering' in the type can be ignored (stock split)
+  transactions$ntype[str_detect(transactions$type,"[Dd]eponering")  &
+                     is.na(transactions$ntype)] = 'Ignore'
+  
+  # Anything with 'dividenduitkering' in the type is a 'Dividend' 
+  transactions$ntype[str_detect(transactions$type,"[Dd]ividenduitkering")  &
+                     is.na(transactions$ntype)] = 'Dividend'
+
+  # Ignore anything with 'toekenning dividend' in the type 
+  transactions$ntype[str_detect(transactions$type,"Toekenning dividend")  &
+                     is.na(transactions$ntype)] = 'Ignore'
+  transactions$mutation[str_detect(transactions$type,"Toekenning dividend")] = 0
+  
+  # Assignments are classed as Sell or Purchases dependent on the amountb positive or negatuive
+  transactions$ntype[str_detect(transactions$type,"[Aa]ssignment") & 
+                     transactions$mutation > 0  &
+                     is.na(transactions$ntype)] = 'Sell'
+  transactions$ntype[str_detect(transactions$type,"[Aa]ssignment") & 
+                     transactions$mutation < 0  &
+                     is.na(transactions$ntype)] = 'Purchase'
+  
+  # Ignore anything with 'stock split' in the description
+  transactions$ntype[str_detect(transactions$description,"Stock split")  &
+                     is.na(transactions$ntype)] = 'Ignore'  
+
+  return (transactions)
+}
+
+
+read_g_transactions <- function() {
+  
+  # One file contains all the transactiobns
+  file <- "~/Documents/R Projects/Invest/Data/Giro/Account.xls"
+  transactions <- read_excel(file)
+  
+  # Drop columns you do not need
+  transactions <- select(transactions, -Tijd, -ISIN, -Saldo, -...11)
+  
+  # Makes the columns into the correct types, drop what you do not need.
+  # Eliminate any duplicates and sort
+  transactions <- transactions %>%
+    mutate(number      = 1,
+           mutation    = as.integer(...9),
+           description = Product,
+           type        = as.factor(Omschrijving),
+           tdate       = as.Date(Datum, format("%d-%m-%Y")),
+           vdate       = as.Date(Valutadatum, format("%d-%m-%Y")),
+           year        = format(vdate,'%Y'),
+           ntype       = NA,
+           source      ="Giro") %>%
+    select(-Omschrijving, -Product, -Datum, -Valutadatum, -...9) %>%
+    select(source, number, ntype, FX, mutation, year, tdate, vdate, type, description) %>%
+    filter(type != "Koersverandering geldmarktfonds (EUR)") %>%
+    filter(!str_detect(type,"Conversie geldmarktfonds"))  %>%
+    mutate(year = format(vdate,'%Y'), source = "Giro") %>%
+    arrange(vdate) 
+
+  
+  transactions$number <- seq.int(1:nrow(transactions))
+  transactions <- unique (transactions)
+  write_transactions(transactions, "ori_g_transactions.csv")
+
+  
+  transactions$ntype[transactions$mutation < 0 & 
+                     str_detect(transactions$type, 'Terugstorting')  &
+                     is.na(transactions$ntype)] = 'Withdraw'
+  
+  transactions$ntype[transactions$mutation > 0 & 
+                     str_detect(transactions$type, '[Ss]torting')  &
+                     is.na(transactions$ntype)] = 'Deposit'
+  
+  transactions$ntype[str_detect(transactions$type, '[Kk]ost')  &
+                     is.na(transactions$ntype)] = 'Cost' 
+  
+transactions$ntype[str_detect(transactions$type, 'Rente')  &
+                     is.na(transactions$ntype)] = 'Cost' 
+  
+  transactions$ntype[transactions$mutation < 0 & 
+                     str_detect(transactions$type, '[Kk]oop')  &
+                     is.na(transactions$ntype)] = 'Purchase'
+  
+  transactions$ntype[transactions$mutation == 0 & 
+                     str_detect(transactions$type, '[Kk]oop')  &
+                     is.na(transactions$ntype)] = 'Transfer In'
+  
+  transactions$ntype[transactions$mutation > 0 & 
+                     str_detect(transactions$type, '[Vv]erkoop')  &
+                     is.na(transactions$ntype)] = 'Sell'
+  
+  transactions$ntype[str_detect(transactions$type,'[Dd]ividend')  &
+                     is.na(transactions$ntype)] = 'Dividend'
+  
+  transactions$ntype[str_detect(transactions$type,'Valuta Debitering|Creditering')  &
+                     is.na(transactions$ntype)] = 'Ignore'
+  
+  transactions$ntype[str_detect(transactions$type,'Geldmarktfondsen Compensatie')  &
+                     is.na(transactions$ntype)] = 'Ignore'
+  
+  transactions$ntype[str_detect(transactions$type,'Fondsuitkering')  &
+                     is.na(transactions$ntype)] = 'Ignore'
+ 
+  # Calculate the product of rate and nr in case of a Transfer In
+  
+  
+  for (i in 1:nrow(transactions)) {
+    if (!is.na(transactions$ntype[i])) {
+      if (str_detect(transactions$ntype[i], 'Transfer In')) {
+        nr_str = str_extract_all(transactions$type[i],"\\(?[0-9,.]+\\)?")[[1]][1]
+        rate_str = str_extract_all(transactions$type[i],"\\(?[0-9,.]+\\)?")[[1]][2]
+        if (!is.na(nr_str) & !is.na(rate_str)) {
+          nr = as.numeric(gsub("\\.", "", nr_str))
+          rate = as.numeric(gsub(",", ".", rate_str))
+          transactions$mutation[i] <- nr * rate
+        }
+      }
+    }
+  }
+
+  return (transactions)
+}
+```
+
+
+```{r}
+
+read_g_portfolio <- function() {
+  
+  # One file contains the portfolio
+  file <- "~/Documents/R Projects/Invest/Data/Portfolio/Portfolio.xls"
+  g_portfolio <- read_excel(file)
+  
+  # Drop columns you do not need
+  g_portfolio <- select(g_portfolio, -`Symbool/ISIN`)
+  
+  # Makes the columns into the correct types, drop what you do not need.
+  g_portfolio <- g_portfolio %>%
+    mutate(count       = as.integer(Aantal),
+           rate        = as.numeric(Slotkoers),
+           value       = as.integer(`Waarde in EUR`),
+           Product     = as.factor(Product)) %>%
+    select(-Aantal, -Slotkoers, -`Waarde in EUR`) %>%
+    select(Product, count, rate, value)  
+    return (g_portfolio)
+}
+```
+
+
+```{r}
+read_b_portfolio <- function() {
+  
+  # One file contains the portfolio
+  file <- "~/Documents/R Projects/Invest/Data/Portfolio/Portefeuille.xlsx"
+  b_portfolio <- read_excel(file)
+  
+  # Set column names
+  colnames(b_portfolio) <- as.character(b_portfolio[2,])
+  
+  b_portfolio <- b_portfolio[-(1:3),]
+  
+  # Drop columns you do not need
+  b_portfolio <- select(b_portfolio, -Tijd, -`Resultaat EUR (%)`, -`Hist. waarde EUR`)
+  
+  # Makes the columns into the correct types, drop what you do not need.
+  # Eliminate any duplicates and sort
+  b_portfolio <- b_portfolio %>%
+    mutate(count       = as.integer(Aantal),
+           rate        = as.numeric(Koers),
+           value       = as.integer(`Waarde EUR`),
+           Product     = as.factor(Fonds))  %>%
+    select(-Aantal, -Koers, -`Waarde EUR`, -Fonds) %>%
+    select(Product, count, rate, value)
+  
+  b_portfolio <- b_portfolio[complete.cases(b_portfolio), ]
+  
+  return (b_portfolio)
+}
+```
+
+
+```{r}
+
+# Do some manual corrections on the transactions that were transderred out of Fundcoach 
+# The records that need to be correctee
+manual_fund_correction <- function(fund_transactions) {
+  
+  descr  = "733 iShares STOXX 600 UCITS ETF"
+  number = 733
+  price  = 39.04
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting"] = 'Withdraw'
+
+  descr  = "498 iShares Core DAX UCITS ETF"
+  number = 498
+  price  = 109.57
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting"] = 'Withdraw'
+
+  descr  = "260 iShares Core MSCI Pacific ex Japan ETF"
+  number = 260
+  price  = 116.99
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting"] = 'Withdraw'
+
+  descr  = "1.857 Xtrackers Nikkei 225 UCITS ETF"
+  number = 1857
+  price  = 16.135
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting" ] = 'Withdraw'
+
+  descr  = "4.852 Vanguard FTSE Emerging Markets ETF"
+  number = 4582
+  price  = 48.35
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting"] = 'Withdraw'
+
+  descr  = "398 iShares Core Euro Stoxx 50 UCITS ETF"
+  number = 398
+  price  = 106.705
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting"] = 'Withdraw'
+
+  descr  = "3.772 Vanguard FTSE Developed Europe UCITS ETF"
+  number = 3772
+  price  = 31.18
+  fund_transactions$mutation[fund_transactions$description == descr &
+                             fund_transactions$type == "Lichting"] = -(number * price)
+  fund_transactions$ntype[fund_transactions$description == descr &
+                          fund_transactions$type == "Lichting"] = 'Withdraw'
+  
+  return (fund_transactions)
+}
+```
+
+
+```{r}
+write_transactions <- function(dataframe, file_name) {
+  
+  data_root <- "~/Documents/R Projects/Invest/Data/Excel/"
+  file   <- paste(data_root, file_name, ".csv", sep = "")
+  write_excel_csv(dataframe, file)
+}
+```
+
+And finally call the functions to do the actualreading and processing of the data 
+```{r}
+
+b_euro_transactions <- read_b_transactions("Euro")
+b_us_transactions   <- read_b_transactions("US")
+b_fund_transactions <- read_b_transactions("FundCoach")
+g_transactions      <- read_g_transactions()
+b_fund_transactions <- manual_fund_correction(b_fund_transactions)
+b_portfolio         <- read_b_portfolio()
+g_portfolio         <- read_g_portfolio()
+
+
+write_transactions(g_portfolio, "g_portfolio")
+write_transactions(g_transactions, "g_transactions")
+write_transactions(b_euro_transactions, "b_euro_transactions")
+write_transactions(b_us_transactions, "b_us_transactions")
+write_transactions(b_fund_transactions, "b_fund_transactions")
+write_transactions(g_portfolio, "g_portfolio")
+write_transactions(b_portfolio, "b_portfolio")
+```
+
+

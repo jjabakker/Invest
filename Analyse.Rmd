@@ -1,0 +1,194 @@
+---
+title: "Analyse"
+author: "Hans"
+date: "11/7/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(tvm)
+```
+
+```{r}
+
+fc_analyse <- function() {
+  fc_deposit <- b_fund_transactions %>%
+    filter(ntype == "Deposit") %>%
+    summarise(sum = sum(mutation))
+
+  fc_withdraw <- b_fund_transactions %>%
+    filter(ntype == "Withdraw") %>%
+    summarise(sum = sum(mutation))
+
+  fc_costs <- b_fund_transactions %>%
+    filter(ntype == "Cost") %>%
+    summarise(sum = sum(mutation))
+
+  fc_dividend <- b_fund_transactions %>%
+    filter(ntype == "Dividend") %>%
+    summarise(sum = sum(mutation))
+
+  fc_netresult <- (-fc_withdraw) - fc_deposit
+  fc_growth <- fc_netresult - fc_dividend + (-fc_costs)
+  
+  paste("Total deposit is", fc_deposit, "and total withdrawal is", as.integer(fc_withdraw))
+  paste("Net result is", as.integer(-fc_withdraw - fc_deposit))
+  paste("The dividend contribution to that result is", fc_dividend)
+}
+
+fc_analyse()
+
+
+eur_analyse <- function() {
+  eur_deposit <- b_euro_transactions %>%
+    filter(ntype == "Deposit") %>%
+    summarise(sum = sum(mutation))
+
+  eur_withdraw <- b_euro_transactions %>%
+    filter(ntype == "Withdraw") %>%
+    summarise(sum = sum(mutation))
+
+  eur_costs <- b_euro_transactions %>%
+    filter(ntype == "Cost") %>%
+    summarise(sum = sum(mutation))
+
+  eur_dividend <- b_euro_transactions %>%
+    filter(ntype == "Dividend") %>%
+    summarise(sum = sum(mutation))
+
+  eur_netresult <- (-eur_withdraw) - eur_deposit
+  eur_growth <- eur_netresult - eur_dividend + (-eur_costs)
+  
+  paste("Total deposit is", eur_deposit, "and total withdrawal is", as.integer(eur_withdraw))
+  paste("Net result is", as.integer(-eur_withdraw - eur_deposit))
+  paste("The dividend contribution to that result is", eur_dividend)
+}
+
+
+us_analyse <- function() {
+  us_deposit <- b_us_transactions %>%
+    filter(ntype == "Deposit") %>%
+    summarise(sum = sum(mutation))
+
+  us_withdraw <- b_us_transactions %>%
+    filter(ntype == "Withdraw") %>%
+    summarise(sum = sum(mutation))
+
+  us_costs <- b_us_transactions %>%
+    filter(ntype == "Cost") %>%
+    summarise(sum = sum(mutation))
+
+  us_dividend <- b_us_transactions %>%
+    filter(ntype == "Dividend") %>%
+    summarise(sum = sum(mutation))
+
+  us_netresult <- (-us_withdraw) - us_deposit
+  us_growth <- us_netresult - us_dividend + (-us_costs)
+  
+  paste("Total deposit is", us_deposit, "and total withdrawal is", as.integer(us_withdraw))
+  paste("Net result is", as.integer(-us_withdraw - us_deposit))
+  paste("The dividend contribution to that result is", us_dividend)
+}
+
+
+# Facebook
+fb <- filter(b_us_transactions, str_detect(description,  "^1 FB"))
+sum(fb$mutation, na.rm = TRUE)
+
+fb %>%
+  group_by(type) %>%
+  summarise(total = sum(mutation))
+
+
+# Shell 
+rds <- filter(b_euro_transactions, str_detect(description, "Royal Dutch"))
+
+# Apple
+
+apple <- filter(b_us_transactions, str_detect(description, "Apple"))
+row   <- apple[1,]
+row$tdate <- today()
+
+row$mutation <- 25000
+apple <- rbind(apple, row)
+xirr(apple$mutation, apple$tdate, interval = c(-10, 100))
+
+# Amazon
+amazon <- filter(b_us_transactions, str_detect(description,  "Amazon"))
+row   <- amazon[1,]
+row$tdate <- today()
+row$mutation <- 100000
+amazon <- rbind(amazon, row)
+xirr(amazon$mutation, amazon$tdate, interval = c(-1, 10))
+```
+
+# Dividend
+
+```{r}
+
+
+us_dividend <- filter(b_us_transactions, str_detect(description, "dividend")) %>%
+  mutate(year = format(vdate,'%Y')) %>%
+  group_by(year) %>%
+  summarise(div = sum(mutation))
+us_dividend
+
+binck_shell_dividend <- filter(b_euro_transactions, 
+                               str_detect(type, "Dividenduitkering")) %>%
+  mutate(year = format(vdate,'%Y')) %>%
+  group_by(year) %>%
+  summarise(div = sum(mutation)) %>%
+  mutate(source = "Binck")
+binck_shell_dividend
+
+giro_shell_dividend <- filter(b_giro_transactions, type == "Dividend", 
+                              description == "ROYAL DUTCH SHELLA") %>%
+  mutate(year = format(vdate,'%Y')) %>%
+  group_by(year) %>%
+  summarise(div = sum(mutation)) %>%
+  mutate(source = "Giro")
+giro_shell_dividend
+
+shell_dividend <- rbind(b_giro_shell_dividend, binck_shell_dividend)
+
+shell_dividend %>%
+  group_by(year) %>%
+  summarise(div = sum(div))
+
+shell_dividend %>%
+  group_by(year, source) %>%
+  summarise(div = sum(div))
+
+shell_dividend %>%
+  group_by(source) %>%
+  summarise(div = sum(div))
+
+giro_dividend <- filter(g_transactions, type == "Dividend", 
+                        description != "ROYAL DUTCH SHELLA") %>%
+  mutate(year = format(vdate,'%Y')) %>%
+  group_by(year) %>%
+  summarise(div = sum(mutation)) %>%
+  mutate(source = "Giro")
+giro_dividend
+```
+
+
+Value portfolio
+
+```{r}
+b_value <- b_portfolio %>%
+  filter(value > 0) %>%
+  summarise(value = sum (value))
+
+g_value <- g_portfolio %>%
+  filter(value > 0) %>%
+  summarise(value = sum (value))
+
+b_value
+g_value
+b_value + g_value
+```
+
