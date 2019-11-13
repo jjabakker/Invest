@@ -34,6 +34,10 @@ read_b_transactions <- function(currency) {
     }
   }
   
+  if (currency == "FundCoach") {
+    currency = "EUR"
+  }
+  
   # Assign the column names, makes them into the correct types, drop what you do not need.
   # Eliminate any duplicates and sort
   
@@ -41,42 +45,46 @@ read_b_transactions <- function(currency) {
                                   'type', 'description', 'mutation', 'total')
 
   transactions <- transactions %>%
-    mutate(mutation = as.integer(mutation), 
-           type     = as.factor(type),
-           ntype    = NA,
-           number   = as.integer(number),
-           tdate    = as.numeric(tdate),
-           tdate    = as.Date(tdate, origin = "1900-01-01"),
-           vdate    = as.numeric(vdate),
-           vdate    = as.Date(vdate, origin = "1900-01-01"),
-           year     = format(vdate,'%Y'), 
-           source = "Binck", 
-           FX = NA) %>%
+    mutate(mutation     = as.integer(mutation), 
+           type         = as.factor(type),
+           ntype        = NA,
+           number       = as.integer(number),
+           tdate        = as.numeric(tdate),
+           tdate        = as.Date(tdate, origin = "1900-01-01"),
+           vdate        = as.numeric(vdate),
+           vdate        = as.Date(vdate, origin = "1900-01-01"),
+           year         = format(vdate,'%Y'), 
+           source       = "Binck", 
+           fund         = NA,
+           FX           = NA,
+           eur_mutation = 0,
+           currency     = currency) %>%
     arrange(number) %>%
-    select(source, number, ntype, FX, mutation, year, tdate, vdate, type, description)
+    select(source, number, ntype, FX, currency, mutation, eur_mutation, year, tdate, vdate, type, description, fund)
   transactions <- unique (transactions)
   write_transactions(transactions, paste("ori_b_", currency, sep = ""))
 
   # Anything with 'abonnement' or 'service fee' or 'Uitleenvergoeding' or 'Rente'
   # or 'Kost'  is a 'Cost'
   
-  
-  transactions$ntype[(str_detect(transactions$description, "koersabonnement|Service fee")  |
-                      str_detect(transactions$type, "Uitleenvergoeding|[Rr]ente| [Kk]ost")) &
-                     is.na(transactions$ntype)] = 'Cost'
-  
-  # Anything with 'Conversie' or 'Afwikkeling ' can be ignored
-  transactions$ntype[(str_detect(transactions$type, "Conversie|Afwikkeling")) &
-                     is.na(transactions$ntype)] = 'Ignore'
+  transactions$ntype[(str_detect(transactions$description, "[Aa]bonnement|Service fee|[Kk]ost|rente") |
+                      str_detect(transactions$description, "BATS US Non-professional") |
+                      str_detect(transactions$type, "[Kk]ost|Uitleenvergoeding")) &
+                     is.na(transactions$ntype) ] = 'Cost'
                      
   # Ignore any bookings from and to the EUR/USD accounts
   transactions$ntype[str_detect(transactions$type,"Geldoverboeking") &
                      str_detect(transactions$description,"USD|EUR") &
                      is.na(transactions$ntype) ] = 'Ignore Internal'
   
-  #transactions$ntype[str_detect(transactions$type,"Geldoverboeking") &
-  #                  str_detect(transactions$description,"253873150") &
-  #                  is.na(transactions$ntype)] = 'Ignore Internal'
+  # Class 'koop' or 'verkoop' as 'Purchase' or 'Sell
+  transactions$ntype[transactions$mutation < 0 & 
+                     str_detect(transactions$type,"[Kk]oop")  &
+                     is.na(transactions$ntype)] = 'Purchase'
+  
+  transactions$ntype[transactions$mutation > 0 & 
+                     str_detect(transactions$type,"[Vv]erkoop") &
+                     is.na(transactions$ntype)] = 'Sell'
   
   # Any 'Geldoverboeking' of a negative amount not to an EUR or USD account is an 'Withdrawal'
   transactions$ntype[transactions$mutation < 0 & 
@@ -89,20 +97,28 @@ read_b_transactions <- function(currency) {
                      str_detect(transactions$type,"Geldoverboeking") &
                      !str_detect(transactions$description,"USD|EUR") &
                      is.na(transactions$ntype)] = 'Deposit'
-   
+  
+    # Ignore anything with 'toekenning dividend' in the type 
+  transactions$ntype[str_detect(transactions$type,"Toekenning dividend") &
+                     is.na(transactions$ntype)] = 'Ignore'
+  transactions$mutation[str_detect(transactions$type,"Toekenning dividend")] = 0
+  
+  # Anything with 'dividenduitkering' in the type is a 'Dividend' 
+  transactions$ntype[str_detect(transactions$type,"[Dd]ividenduitkering")  &
+                     is.na(transactions$ntype)] = 'Dividend'
+  
+  # Anything with 'Afwikkeling dividend' in the type is a 'Dividend' 
+  transactions$ntype[str_detect(transactions$type,"Afwikkeling dividend|keuze div")  &
+                     is.na(transactions$ntype)] = 'Dividend'
+
+  # Anything with 'Conversie' or 'Afwikkeling ' can be ignored
+  transactions$ntype[(str_detect(transactions$type, "Conversie")) &
+                     is.na(transactions$ntype)] = 'Ignore'
+  
   # Any 'Geldoverboeking' of a 0 amount can be ignored
   transactions$ntype[(is.na(transactions$mutation) | transactions$mutation == 0) & 
                      str_detect(transactions$type, "Geldoverboeking") &
                      is.na(transactions$ntype)] = 'Ignore'
-  
-  # Class 'koop' or 'verkoop' as 'Purchase' or 'Sell
-  transactions$ntype[transactions$mutation < 0 & 
-                     str_detect(transactions$type,"[Kk]oop")  &
-                     is.na(transactions$ntype)] = 'Purchase'
-  
-  transactions$ntype[transactions$mutation > 0 & 
-                     str_detect(transactions$type,"[Vv]erkoop") &
-                     is.na(transactions$ntype)] = 'Sell'
 
   # Anything with 'Lichting' in the type can be ignored (option expiry)
   transactions$ntype[str_detect(transactions$type,"[Ll]ichting")  &
@@ -112,16 +128,7 @@ read_b_transactions <- function(currency) {
   transactions$ntype[str_detect(transactions$type,"[Dd]eponering")  &
                      is.na(transactions$ntype)] = 'Ignore'
   
-  # Anything with 'dividenduitkering' in the type is a 'Dividend' 
-  transactions$ntype[str_detect(transactions$type,"[Dd]ividenduitkering")  &
-                     is.na(transactions$ntype)] = 'Dividend'
-
-  # Ignore anything with 'toekenning dividend' in the type 
-  transactions$ntype[str_detect(transactions$type,"Toekenning dividend")  &
-                     is.na(transactions$ntype)] = 'Ignore'
-  transactions$mutation[str_detect(transactions$type,"Toekenning dividend")] = 0
-  
-  # Assignments are classed as Sell or Purchases dependent on the amountb positive or negatuive
+  # Assignments are classed as Sell or Purchases dependent on the amount positive or negatuive
   transactions$ntype[str_detect(transactions$type,"[Aa]ssignment") & 
                      transactions$mutation > 0  &
                      is.na(transactions$ntype)] = 'Sell'
@@ -149,17 +156,20 @@ read_g_transactions <- function() {
   # Makes the columns into the correct types, drop what you do not need.
   # Eliminate any duplicates and sort
   transactions <- transactions %>%
-    mutate(number      = 1,
-           mutation    = as.integer(...9),
-           description = Product,
-           type        = as.factor(Omschrijving),
-           tdate       = as.Date(Datum, format("%d-%m-%Y")),
-           vdate       = as.Date(Valutadatum, format("%d-%m-%Y")),
-           year        = format(vdate,'%Y'),
-           ntype       = NA,
-           source      ="Giro") %>%
+    mutate(number       = 1,
+           currency     = Mutatie,
+           mutation     = as.integer(...9),
+           description  = Product,
+           type         = as.factor(Omschrijving),
+           tdate        = as.Date(Datum, format("%d-%m-%Y")),
+           vdate        = as.Date(Valutadatum, format("%d-%m-%Y")),
+           year         = format(vdate,'%Y'),
+           ntype        = NA,
+           source       = "Giro",
+           eur_mutation = 0,
+           fund         = NA) %>%
     select(-Omschrijving, -Product, -Datum, -Valutadatum, -...9) %>%
-    select(source, number, ntype, FX, mutation, year, tdate, vdate, type, description) %>%
+    select(source, number, ntype, FX, currency, mutation, eur_mutation, year, tdate, vdate, type, description, fund) %>%
     filter(type != "Koersverandering geldmarktfonds (EUR)") %>%
     filter(!str_detect(type,"Conversie geldmarktfonds"))  %>%
     mutate(year = format(vdate,'%Y'), source = "Giro") %>%
@@ -169,7 +179,6 @@ read_g_transactions <- function() {
   transactions$number <- seq.int(1:nrow(transactions))
   transactions <- unique (transactions)
   write_transactions(transactions, "ori_g_transactions.csv")
-
   
   transactions$ntype[transactions$mutation < 0 & 
                      str_detect(transactions$type, 'Terugstorting')  &
@@ -182,7 +191,7 @@ read_g_transactions <- function() {
   transactions$ntype[str_detect(transactions$type, '[Kk]ost')  &
                      is.na(transactions$ntype)] = 'Cost' 
   
-transactions$ntype[str_detect(transactions$type, 'Rente')  &
+  transactions$ntype[str_detect(transactions$type, 'Rente')  &
                      is.na(transactions$ntype)] = 'Cost' 
   
   transactions$ntype[transactions$mutation < 0 & 
@@ -210,7 +219,6 @@ transactions$ntype[str_detect(transactions$type, 'Rente')  &
                      is.na(transactions$ntype)] = 'Ignore'
  
   # Calculate the product of rate and nr in case of a Transfer In
-  
   
   for (i in 1:nrow(transactions)) {
     if (!is.na(transactions$ntype[i])) {
@@ -247,9 +255,11 @@ read_g_portfolio <- function() {
     mutate(count       = as.integer(Aantal),
            rate        = as.numeric(Slotkoers),
            value       = as.integer(`Waarde in EUR`),
-           Product     = as.factor(Product)) %>%
-    select(-Aantal, -Slotkoers, -`Waarde in EUR`) %>%
-    select(Product, count, rate, value)  
+           product     = as.factor(Product),
+           fund        = NA) %>%
+    select(-Aantal, -Slotkoers, -Product, -`Waarde in EUR`) %>%
+    filter(product != 'CASH & CASH FUND (EUR)') %>%
+    select(product, count, rate, value, fund)  
     return (g_portfolio)
 }
 ```
@@ -276,12 +286,14 @@ read_b_portfolio <- function() {
     mutate(count       = as.integer(Aantal),
            rate        = as.numeric(Koers),
            value       = as.integer(`Waarde EUR`),
-           Product     = as.factor(Fonds))  %>%
-    select(-Aantal, -Koers, -`Waarde EUR`, -Fonds) %>%
-    select(Product, count, rate, value)
+           product     = as.factor(Fonds))  %>%
+    select(-Aantal, -Koers, -`Waarde EUR`, -Fonds)
+  
   
   b_portfolio <- b_portfolio[complete.cases(b_portfolio), ]
-  
+  b_portfolio <- mutate(b_portfolio, fund = NA)
+  b_portfolio <- select(b_portfolio, product, count, rate, value, fund)
+
   return (b_portfolio)
 }
 ```
@@ -355,6 +367,129 @@ manual_fund_correction <- function(fund_transactions) {
 
 
 ```{r}
+
+translation_table <- tribble(
+    ~search,             ~replace,
+    'Activision Blizzard',              'Activision Blizzard',
+    'Adobe',                            'Adobe',
+    'American International Group|AIG', 'American International Group',    
+    'Apple',                            'Apple', 
+    'Amazon',                           'Amazon',
+    'American Tower|AMT',               'American Tower',
+    'Amgen',                            'Amgen',
+    'AmTrust',                          'AmTrust',
+    'Arista Networks',                  'Arista Networks',
+    'Baidu',                            'Baidu',
+    'Berkshire Hathaway',               'Berkshire Hathaway',
+    'Broadridge',                       'Broadridge Financial Solutions',
+    'Buckle',                           'Buckle',
+    'Cisco',                            'Cisco',
+    'Coherent',                         'Coherent',
+    'DB X-TRACKERS NIKKEI 225',         'Nikkei 225',
+    'Ellie Mae',                        'Ellie Mae',  
+    'Facebook|FB',                      'Facebook',
+    'Factset Research Systems',         'Factset Research Systems',
+    'FireEye',                          'FireEye',
+    'Fitbit',                           'Fitbit',
+    'Google|Alphabet',                  'Google',
+    'Generac',                          'Generac',
+    'Gentex',                           'Gentex',
+    'Gilead Sciences',                  'Gilead Sciences',
+    'Idexx Laboratories',               'Idexx Laboratories',
+    'Johnson & Johnson',                'Johnson & Johnson',
+    'Halliburton',                      'Halliburton',
+    'HEICO',                            'Heico',
+    'Hyatt',                            'Hyatt',   
+    'Illumina',                         'Illumina', 
+    'Intel|INTC',                       'Intel',
+
+    'ISHS CORE DAX UCITS ETF',          'iShares Dax',
+    'iShares Core DAX UCITS ETF',       'iShares Dax',
+    
+    'ISHARES CORE MSCI EMER',           'iShares Emerging Markets',
+    'ISHARES CORE MSCI PACIF EX JPN',   'iShares Pacific ex Japan',
+    'iShares Core MSCI Pacific ex Jap', 'iShares Pacific ex Japan',
+    
+    'iShares Core FTSE 100 UCITS ETF',  'iShares FTSE 100',                                
+    
+    'ISHR ESTX50 B A',                  'iShares Euro STOXX 50',
+    'iShares Core Euro Stoxx 50 UCITS', 'iShares Euro STOXX 50',
+    
+    'ISH.STOX.EUROPE 600 U.ETF',        'Ishares STOXX 600 Europe',
+    'iShares STOXX 600 UCITS ETF',      'Ishares STOXX 600 Europe',
+    
+    'Xtrackers Nikkei 225 UCITS ETF',   'Xtrackers Nikkei 225 UCITS',
+    
+    'Kinder Morgan|KMI',                'Kinder Morgan',
+    'Littelfuse',                       'Littelfuse',
+    'Markel',                           'Markel',
+    'Master',                           'Master', 
+    'Medtronic',                        'Medtronic',
+    'Microsoft',                        'Microsoft',
+    'National Oilwell Varco|NOV C|NOV P|NOW', 'National Oilwell Varco',
+    'Netflix|NFLX',                     'Netflix',
+    'Nike',                             'Nike',
+    'NVIDIA',                           'NVIDIA',
+    'Open Text',                        'Open Text',
+    'Oracle',                           'Oracle',
+    'Paycom|PAYC',                      'Paycom',
+    'PayPal',                           'PayPal',
+    'QQQ',                              'QQQ',
+    'ROYAL DUTCH SHELLA|Royal Dutch Shell|RD C|RD P|RDS', 'Shell',
+    'RPM',                              'RPM',
+    'RPX',                              'RPX',
+    'SBUX|Starbucks',                   'Starbucks',
+    'Sierra Wireless',                  'Sierra Wireless', 
+    'Skyworks Solutions',               'Skyworks Solutions',
+    'Stitch Fix',                       'Stitch Fix',
+    'TD Ameritrade',                    'TD Ameritrade',
+    'Tesla',                             'Tesla',
+    'Tupperware',                       'Tupperware',
+    'Twitter',                          'Twitter',
+    'UA P|UA C|Under Armour',           'Under Armour',
+    'Valmont',                          'Valmont Industries',
+    
+    'VANGUARD FTSE EM',                 'Vanguard FTSE Emerging',
+    'Vanguard FTSE Emerging Markets',   'Vanguard FTSE Emerging',
+    
+    'VANGUARD FTSE EUR',                'Vanguard FTSE EUR',
+    'Vanguard FTSE Developed Europe',   'Vanguard FTSE EUR',
+    
+    'Verisk Analytics Inc',             'Verisk',
+    'Visa',                             'Visa',  
+    'Walt Disney',                      'Walt Disney',
+    'Waste Management',                 'Waste Management',
+    'Wells Fargo|WFC',                  'Wells Fargo',
+    'WisdomTree',                       'WisdomTree',
+    'Whole Foods Market|WFM',           'Whole Foods Market',
+    'Zoom',                             'Zoom'
+
+  )
+
+
+# Introduce standardised names in the transaction tables
+
+align_t_names <- function(transactions) {
+  for (i in 1:nrow(translation_table)) {
+      transactions$fund[str_detect(transactions$description, translation_table$search[i])  &
+                        is.na(transactions$fund)] = translation_table$replace[i]  
+  }
+  return(transactions)
+}
+
+# Introduce standardised names in the portfolio tables
+
+align_p_names <- function(transactions) {
+  for (i in 1:nrow(translation_table)) {
+      transactions$fund[str_detect(transactions$product, translation_table$search[i])  &
+                        is.na(transactions$fund)] = translation_table$replace[i]  
+  }
+  return(transactions)
+}
+```
+
+
+```{r}
 write_transactions <- function(dataframe, file_name) {
   
   data_root <- "~/Documents/R Projects/Invest/Data/Excel/"
@@ -363,10 +498,38 @@ write_transactions <- function(dataframe, file_name) {
 }
 ```
 
-And finally call the functions to do the actualreading and processing of the data 
+
 ```{r}
 
-b_euro_transactions <- read_b_transactions("Euro")
+convert_currency <- function(table) {
+  for (i in 1:nrow(table)) {
+  mutation = table$mutation[i]
+    if (table$currency[i] == "USD") {
+      eur_mutation = mutation * one_usd_is_one_euro
+    }
+    else if (table$currency[i] == "JPY") {
+      eur_mutation = mutation * one_yen_is_one_euro
+    }
+    else {
+      eur_mutation = mutation
+    }
+    table$eur_mutation[i] = eur_mutation 
+  }
+  return(table)
+}
+
+```
+
+
+
+And finally call the functions to do the actual reading and processing of the data 
+
+
+```{r}
+one_usd_is_one_euro = 0.9086
+one_yen_is_one_euro = 0.0084
+
+b_euro_transactions <- read_b_transactions("EUR")
 b_us_transactions   <- read_b_transactions("US")
 b_fund_transactions <- read_b_transactions("FundCoach")
 g_transactions      <- read_g_transactions()
@@ -374,14 +537,30 @@ b_fund_transactions <- manual_fund_correction(b_fund_transactions)
 b_portfolio         <- read_b_portfolio()
 g_portfolio         <- read_g_portfolio()
 
+b_euro_transactions <- align_t_names(b_euro_transactions)
+b_us_transactions   <- align_t_names(b_us_transactions)
+b_fund_transactions <- align_t_names(b_fund_transactions)
+g_transactions      <- align_t_names(g_transactions)
 
-write_transactions(g_portfolio, "g_portfolio")
+b_euro_transactions <- convert_currency(b_euro_transactions)
+b_us_transactions   <- convert_currency(b_us_transactions)
+b_fund_transactions <- convert_currency(b_fund_transactions)
+g_transactions      <- convert_currency(g_transactions)
+
+b_portfolio         <- align_p_names(b_portfolio)
+g_portfolio         <- align_p_names(g_portfolio)
+
+t_transactions      <- rbind(b_euro_transactions, b_us_transactions, b_fund_transactions, g_transactions)
+
 write_transactions(g_transactions, "g_transactions")
 write_transactions(b_euro_transactions, "b_euro_transactions")
 write_transactions(b_us_transactions, "b_us_transactions")
 write_transactions(b_fund_transactions, "b_fund_transactions")
+write_transactions(t_transactions, "t_transactions")
 write_transactions(g_portfolio, "g_portfolio")
 write_transactions(b_portfolio, "b_portfolio")
+
 ```
+
 
 

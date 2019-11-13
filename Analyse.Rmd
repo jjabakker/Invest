@@ -95,7 +95,7 @@ us_analyse <- function() {
 
 
 # Facebook
-fb <- filter(b_us_transactions, str_detect(description,  "^1 FB"))
+fb <- filter(t_transactions, str_detect(description,  "^1 FB"))
 sum(fb$mutation, na.rm = TRUE)
 
 fb %>%
@@ -103,12 +103,28 @@ fb %>%
   summarise(total = sum(mutation))
 
 
-# Shell 
-rds <- filter(b_euro_transactions, str_detect(description, "Royal Dutch"))
+# Shell dividend
+t_transactions %>% 
+  filter(str_detect(fund, "Shell") & ntype == "Dividend") %>%
+  group_by(year) %>%
+  summarise(sum = sum(eur_mutation))
+
+# US dividend
+b_us_transactions %>%
+  filter(ntype == "Dividend") %>%
+  group_by(year) %>%
+  summarise(sum = sum(eur_mutation))
+
+# Total dividend
+t_transactions %>%
+  filter(ntype == "Dividend") %>%
+  group_by(year) %>%
+  summarise(sum = sum(eur_mutation))
+
 
 # Apple
 
-apple <- filter(b_us_transactions, str_detect(description, "Apple"))
+apple <- filter(t_transactions, str_detect(fund, "Apple"))
 row   <- apple[1,]
 row$tdate <- today()
 
@@ -117,7 +133,7 @@ apple <- rbind(apple, row)
 xirr(apple$mutation, apple$tdate, interval = c(-10, 100))
 
 # Amazon
-amazon <- filter(b_us_transactions, str_detect(description,  "Amazon"))
+amazon <- filter(t_transactions, str_detect(description, "Amazon"))
 row   <- amazon[1,]
 row$tdate <- today()
 row$mutation <- 100000
