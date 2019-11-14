@@ -12,6 +12,38 @@ library(lubridate)
 library(tvm)
 ```
 
+
+```{r}
+deposit <- t_transactions %>%
+  filter(ntype == "Deposit") %>%
+  summarise(value = sum(eur_mutation))
+
+withdraw <- t_transactions %>%
+  filter(ntype == "Withdraw") %>%
+  summarise(value = sum(eur_mutation))
+
+nett_deposit <- t_transactions %>%
+  filter(ntype == "Deposit") %>%
+  summarise(value = sum(eur_mutation)) + 
+  t_transactions %>%
+  filter(ntype == "Withdraw") %>%
+  summarise(value = sum(eur_mutation))
+
+value <- t_portfolio %>%
+    summarise(value = sum(value))
+
+value - nett_deposit
+
+total_gain  <- t_portfolio %>%
+  summarise(value = sum(value)) - (
+  t_transactions %>%
+  filter(ntype == "Deposit") %>%
+  summarise(value = sum(eur_mutation)) + 
+  t_transactions %>%
+  filter(ntype == "Withdraw") %>%
+  summarise(value = sum(eur_mutation)))
+```
+
 ```{r}
 
 fc_analyse <- function() {

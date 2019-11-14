@@ -198,6 +198,9 @@ read_g_transactions <- function() {
                      str_detect(transactions$type, '[Kk]oop')  &
                      is.na(transactions$ntype)] = 'Purchase'
   
+  # This is a special case: it concerns the transfer of shares from Binck to Degiro
+  # The Transfer In records need to be updated later, after the amount has been calculated (and then it becomes 'Deposit')
+  
   transactions$ntype[transactions$mutation == 0 & 
                      str_detect(transactions$type, '[Kk]oop')  &
                      is.na(transactions$ntype)] = 'Transfer In'
@@ -218,6 +221,7 @@ read_g_transactions <- function() {
   transactions$ntype[str_detect(transactions$type,'Fondsuitkering')  &
                      is.na(transactions$ntype)] = 'Ignore'
  
+  
   # Calculate the product of rate and nr in case of a Transfer In
   
   for (i in 1:nrow(transactions)) {
@@ -229,10 +233,13 @@ read_g_transactions <- function() {
           nr = as.numeric(gsub("\\.", "", nr_str))
           rate = as.numeric(gsub(",", ".", rate_str))
           transactions$mutation[i] <- nr * rate
+          transactions$ntype[i] <- "Deposit"
         }
       }
     }
   }
+  
+  
 
   return (transactions)
 }
@@ -551,6 +558,7 @@ b_portfolio         <- align_p_names(b_portfolio)
 g_portfolio         <- align_p_names(g_portfolio)
 
 t_transactions      <- rbind(b_euro_transactions, b_us_transactions, b_fund_transactions, g_transactions)
+t_portfolio         <- rbind(b_portfolio, g_portfolio)
 
 write_transactions(g_transactions, "g_transactions")
 write_transactions(b_euro_transactions, "b_euro_transactions")
@@ -559,6 +567,7 @@ write_transactions(b_fund_transactions, "b_fund_transactions")
 write_transactions(t_transactions, "t_transactions")
 write_transactions(g_portfolio, "g_portfolio")
 write_transactions(b_portfolio, "b_portfolio")
+write_transactions(t_portfolio, "t_portfolio")
 
 ```
 
